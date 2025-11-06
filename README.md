@@ -67,3 +67,137 @@
 ```bash
 sudo apt update
 sudo apt install python3 python3-pip -y
+```
+Проверка установки:
+
+```bash
+python3 --version
+pip3 --version
+```
+Пример корректного вывода:
+```bash
+Python 3.10.1
+pip 23.0.1
+```
+Установка необходимых пакетов:
+```bash
+pip3 install flask requests gunicorn
+```
+### 2️⃣ Создание проекта и виртуального окружения
+```bash
+mkdir ~/ecowitt_receiver
+cd ~/ecowitt_receiver
+python3 -m venv venv
+source venv/bin/activate
+```
+После активации окружения в начале строки появится:
+
+```bash
+(venv)
+```
+### 3️⃣ Создание Flask-приложения
+Создайте файл приложения:
+```bash
+nano app.py
+```
+
+```bash
+from flask import Flask, request, jsonify
+from datetime import timezone
+import requests
+import datetime
+import logging
+import os
+
+app = Flask(__name__)
+
+# === НАСТРОЙКИ ===
+FROST_URL = "http://90.156.134.128:8080/FROST-Server/v1.1/Observations"
+
+# Ecowitt → FROST Datastream IDs
+DATASTREAM_MAP = {
+    "feelslike": 6,  # Ощущаемая температура воздуха
+    "humidity": 7,   # Относительная влажность воздуха
+}
+
+# === ЛОГИ ===
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    filename="logs/ecowitt_receiver.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+@app.route('/ecowitt_upload', methods=['POST'])
+def ecowitt_upload():
+    """Основная точка приёма данных от метеостанции Ecowitt."""
+    data = request.form.to_dict()
+    time_iso = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat()
+    results = []
+
+    for key, datastream_id in DATASTREAM_MAP.items():
+        if key in data:
+            try:
+                value = float(data[key])
+                payload = {
+                    "Datastream": {"@iot.id": datastream_id},
+                    "result": value,
+                    "phenomenonTime": time_iso
+                }
+                r = requests.post(FROST_URL, json=payload, timeout=5)
+                results.append({key: r.status_code})
+            except Exception as e:
+                results.append({key: f"error {e}"})
+        else:
+            results.append({key: "missing"})
+
+    return jsonify({"status": "ok", "results": results}), 200
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8081)
+```
+Сохраните файл (Ctrl+O, затем Enter) и выйдите (Ctrl+X).
+
+### 4️⃣ Запуск Flask-приложения
+```bash
+python3 app.py
+```
+Чтобы оставить процесс активным:
+
+1. используйте screen;
+2. вернитесь в основную сессию: Ctrl+A, затем Ctrl+D.
+
+### 5️⃣ Проверка работы Flask
+
+Отправьте тестовый запрос вр включенной сессии SSH:
+```bash
+curl -X POST -d "feelslike=12.3&humidity=80" http://localhost:8081/ecowitt_upload
+```
+Пример ответа:
+```bash
+{"results":[{"feelslike":201},{"humidity":201}],"status":"ok"}
+```
+Код 201 означает успешную отправку данных на сервер FROST.
+
+### 🌦️ Настройка передачи данных со шлюза Ecowitt
+
+Откройте приложение WS View Plus.
+
+Перейдите:
+More → Weather Services → Customized.
+
+Введите:
+
+IP-адрес сервера
+
+Путь: /ecowitt_upload
+
+Порт: 8081
+
+### ✅ Проверка данных на сервере FROST
+Откройте в браузере:
+```bash
+http://<ip-адрес>:8080/FROST-Server/v1.1/Observations
+```
+Если всё работает корректно — будут отображаться свежие наблюдения от метеостанций.
+
